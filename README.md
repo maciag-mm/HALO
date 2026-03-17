@@ -1,9 +1,8 @@
 # HALO
 Internal group communicator for QGIS 3.34 or higher.
 
-========================================
            HALO – USER GUIDE
-========================================
+
 
 OVERVIEW
 Halo is a QGIS plugin that displays messages based on an online
