@@ -8,16 +8,21 @@ import urllib.request
 import urllib.parse
 import urllib.error
 from datetime import datetime
-from qgis.PyQt.QtCore import Qt, QObject, QEvent, QFileSystemWatcher, QSettings, QTimer, QSize, QUrl, QPoint
-from qgis.PyQt.QtWidgets import (QWidget, QLabel, QPushButton, QHBoxLayout,
-                                 QVBoxLayout, QToolBar, QApplication, QSizePolicy,
-                                 QFileDialog, QInputDialog, QMessageBox, QMenu, QDialog,
-                                 QTextEdit, QLineEdit, QDialogButtonBox)
-from qgis.PyQt.QtGui import QFont, QIcon, QPixmap, QDesktopServices
+
+from qgis.PyQt.QtCore import (
+    Qt, QObject, QEvent, QFileSystemWatcher, QSettings, QTimer,
+    QSize, QUrl, QPoint
+)
+from qgis.PyQt.QtWidgets import (
+    QWidget, QLabel, QPushButton, QHBoxLayout,
+    QVBoxLayout, QToolBar, QApplication, QSizePolicy,
+    QFileDialog, QInputDialog, QMessageBox, QMenu, QDialog,
+    QTextEdit, QLineEdit, QDialogButtonBox
+)
+from qgis.PyQt.QtGui import QFont, QIcon, QPixmap, QDesktopServices, QFontMetrics
 
 from qgis.core import QgsMessageLog, Qgis
 
-# optional import for Excel (.xlsx)
 try:
     import openpyxl
 except Exception:
@@ -52,7 +57,6 @@ class Halo:
         self.toolbar = None
         self.widget = None
 
-        # UI widgets
         self.icon_btn = None
         self.link_btns = [None, None, None]
         self.num_btn = None
@@ -63,15 +67,16 @@ class Halo:
         self.msg_label = None
         self.right_pane = None
         self.unread_btn = None
+        self.mark_all_btn = None
+        self.mark_all_folder_label = None
+        self.mark_all_tick_label = None
         self.halo_icon_label = None
         self.add_btn = None
 
-        # Data
-        self.entries = []  # tuples: (num, dt_obj_or_None, raw_date_str, message_html_or_plain)
+        self.entries = []
         self.index = 0
         self.read_flags = []
 
-        # Source and settings
         self.filepath = ''
         self.fs_watcher = QFileSystemWatcher()
         self.settings = QSettings()
@@ -79,14 +84,15 @@ class Halo:
         self._index_key = 'Halo/index'
         self._read_map_key = 'Halo/read_map'
         self._signature_key = 'Halo/signature'
-        self._external_link_keys = ['Halo/external_link_1', 'Halo/external_link_2', 'Halo/external_link_3']
-        # webapp settings (user-configurable)
+        self._external_link_keys = [
+            'Halo/external_link_1',
+            'Halo/external_link_2',
+            'Halo/external_link_3'
+        ]
         self._webapp_url_key = 'Halo/webapp_url'
         self._webapp_token_key = 'Halo/webapp_token'
-        # form respondent link (set by right-click on +)
         self._form_url_key = 'Halo/form_url'
 
-        # timers
         self.blink_timer = QTimer()
         self.blink_timer.setInterval(600)
         self.blink_timer.timeout.connect(self._on_blink_timeout)
@@ -97,50 +103,30 @@ class Halo:
         self.halo_blink_timer.timeout.connect(self._on_halo_blink)
         self._halo_blink_state = False
 
-        # auto-refresh (1 minute)
         self.auto_timer = QTimer()
         self.auto_timer.setInterval(60 * 1000)
         self.auto_timer.timeout.connect(self._on_auto_refresh)
         self._is_refreshing = False
 
-        # halo icon pixmap (if icon.png present)
         self._halo_colored = None
-
-        # polish months
         self._months_pl = ["sty", "lut", "mar", "kwi", "maj", "cze", "lip", "sie", "wrz", "paź", "lis", "gru"]
-
         self._last_unread_pos = -1
 
-    # ---------- logging helper ----------
     def _log(self, message: str, level=Qgis.Info):
         try:
             QgsMessageLog.logMessage(str(message), 'Halo', level)
         except Exception:
             pass
-        try:
-            short = str(message).replace('\r', '').strip()
-            if len(short) > 500:
-                short = short[:500] + '...'
-            if hasattr(self, 'msg_label') and self.msg_label:
-                # only set a short status, not overwrite actual messages list
-                self.msg_label.setText(short)
-        except Exception:
-            pass
 
-    # ---------- GUI init ----------
     def initGui(self):
-        # load saved source & state
         saved_fp = self.settings.value(self._settings_key, '')
         if saved_fp:
             self.filepath = saved_fp
         try:
-            saved_index = int(self.settings.value(self._index_key, 0))
-            if saved_index >= 0:
-                self.index = saved_index
+            self.index = int(self.settings.value(self._index_key, 0))
         except Exception:
             self.index = 0
 
-        # toolbar and inner widget
         self.toolbar = QToolBar("Halo")
         self.toolbar.setMovable(True)
         self.toolbar.setFloatable(True)
@@ -156,10 +142,11 @@ class Halo:
         cm_to_px = lambda cm: int(round((cm * dpi_x) / 2.54))
 
         first_w = cm_to_px(1.5)
-        second_w = cm_to_px(12)
+        second_w = cm_to_px(12) - 100
+        if second_w < cm_to_px(6):
+            second_w = cm_to_px(6)
         third_w = cm_to_px(6)
 
-        # icon button (leftmost)
         self.icon_btn = QPushButton()
         self.icon_btn.setToolTip("Wybierz plik z komunikatami lub wklej URL (prawy przycisk) / Ustaw WebApp")
         self.icon_btn.setFixedSize(40, 40)
@@ -173,12 +160,10 @@ class Halo:
                 self._load_halo_pixmap(icon_path)
         except Exception:
             pass
-        # left-click shows the same menu as right-click for convenience
         self.icon_btn.clicked.connect(self.choose_file)
         self.icon_btn.setContextMenuPolicy(Qt.CustomContextMenu)
         self.icon_btn.customContextMenuRequested.connect(self._icon_context_menu)
 
-        # three quick link buttons (red, green, blue)
         link_btn_w = max(16, int(self.icon_btn.sizeHint().width() / 2))
         link_btn_h = self.icon_btn.sizeHint().height()
         colors = ['red', 'green', 'blue']
@@ -196,7 +181,6 @@ class Halo:
             btn.setToolTip("Lewy klik: otwórz. Prawy klik: ustaw.")
             self.link_btns[i] = btn
 
-        # navigation arrows (top-aligned by layout)
         self.nav_widget = QWidget()
         nav_layout = QVBoxLayout()
         nav_layout.setContentsMargins(0, 0, 0, 0)
@@ -205,9 +189,8 @@ class Halo:
         self.btn_up.setToolTip("Poprzedni komunikat")
         self.btn_down = QPushButton("▼")
         self.btn_down.setToolTip("Następny komunikat (jeśli nie ostatni, miga)")
-        arrow_w = 18
-        self.btn_up.setFixedWidth(arrow_w)
-        self.btn_down.setFixedWidth(arrow_w)
+        self.btn_up.setFixedWidth(18)
+        self.btn_down.setFixedWidth(18)
         self.btn_up.setFixedHeight(18)
         self.btn_down.setFixedHeight(18)
         nav_layout.addWidget(self.btn_up, alignment=Qt.AlignHCenter | Qt.AlignTop)
@@ -215,11 +198,11 @@ class Halo:
         nav_layout.addStretch()
         self.nav_widget.setLayout(nav_layout)
 
-        # number + date column
         num_col_widget = QWidget()
         num_col_layout = QVBoxLayout()
         num_col_layout.setContentsMargins(0, 0, 0, 0)
         num_col_layout.setSpacing(2)
+
         self.num_btn = QPushButton("-")
         self.num_btn.setToolTip("Kliknij, aby oznaczyć jako przeczytane/nieprzeczytane")
         self.num_btn.setFlat(True)
@@ -244,7 +227,6 @@ class Halo:
         num_col_layout.addStretch()
         num_col_widget.setLayout(num_col_layout)
 
-        # message label
         self.msg_label = QLabel("Brak danych")
         self.msg_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.msg_label.setWordWrap(True)
@@ -255,29 +237,72 @@ class Halo:
         self.msg_label.setMaximumWidth(second_w)
         self.msg_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
 
-        # right pane: unread counter, add (rocket) button, halo icon
-        self.right_pane = QWidget()
-        rp_layout = QVBoxLayout()
-        rp_layout.setContentsMargins(0, 0, 0, 0)
-        rp_layout.setSpacing(4)
-        top_row = QWidget()
-        top_row_layout = QHBoxLayout()
-        top_row_layout.setContentsMargins(0, 0, 0, 0)
-        top_row_layout.setSpacing(6)
         self.unread_btn = QPushButton("Nieprzeczytane: 0")
         self.unread_btn.setFlat(True)
+        self.unread_btn.setFixedWidth(170)
         font_unread = QFont()
         font_unread.setBold(True)
         font_unread.setPointSize(10)
         self.unread_btn.setFont(font_unread)
         self.unread_btn.clicked.connect(self._on_unread_clicked)
+        self.unread_btn.setToolTip("Kliknij: przejdź do kolejnego nieprzeczytanego komunikatu")
 
-        # plus button replaced with rocket icon/text - LEFT CLICK: open respondent form (if set) or open add dialog (fallback)
-        # RIGHT CLICK: set respondent form URL
-        # use rocket emoji as graphical symbol (keeps it self-contained)
+        self.right_pane = QWidget()
+        rp_layout = QVBoxLayout()
+        rp_layout.setContentsMargins(0, 0, 0, 0)
+        rp_layout.setSpacing(4)
+
+        top_row = QWidget()
+        top_row_layout = QHBoxLayout()
+        top_row_layout.setContentsMargins(0, 0, 0, 0)
+        top_row_layout.setSpacing(8)
+
+        self.mark_all_btn = QPushButton()
+        self.mark_all_btn.setToolTip("Oznacz wszystkie jako przeczytane")
+        self.mark_all_btn.setFlat(False)
+        self.mark_all_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                border: 1px solid rgba(0,0,0,0);
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: rgba(200, 0, 0, 0.06);
+            }
+            QPushButton:pressed {
+                background-color: rgba(200, 0, 0, 0.12);
+            }
+        """)
+        mark_w = 34
+        mark_h = 34
+        self.mark_all_btn.setFixedSize(mark_w, mark_h)
+
+        folder_lbl = QLabel("🗂️", self.mark_all_btn)
+        folder_lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+        folder_lbl.setAlignment(Qt.AlignCenter)
+        font_mark_folder = QFont()
+        font_mark_folder.setPointSize(14)
+        folder_lbl.setFont(font_mark_folder)
+        folder_lbl.setGeometry(0, 0, mark_w, mark_h)
+
+        tick_lbl = QLabel("✔", self.mark_all_btn)
+        tick_lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+        tick_lbl_font = QFont()
+        tick_lbl_font.setPointSize(10)
+        tick_lbl_font.setBold(True)
+        tick_lbl.setFont(tick_lbl_font)
+        tick_lbl.setStyleSheet("color: red; background: rgba(0,0,0,0);")
+        tick_x = int(mark_w * 0.58)
+        tick_y = int(mark_h * 0.12)
+        tick_lbl.move(tick_x, tick_y)
+        tick_lbl.resize(12, 12)
+
+        self.mark_all_folder_label = folder_lbl
+        self.mark_all_tick_label = tick_lbl
+        self.mark_all_btn.clicked.connect(self._on_mark_all_clicked)
+
         self.add_btn = QPushButton("🚀")
         self.add_btn.setToolTip("Lewy klik: otwórz formularz (jeśli ustawiono) lub Dodaj komunikat. Prawy klik: ustaw link formularza.")
-        # make rocket much larger and bolder (visual)
         font_plus = QFont()
         font_plus.setPointSize(18)
         font_plus.setBold(True)
@@ -295,19 +320,23 @@ class Halo:
         self.halo_icon_label.setFixedSize(32, 32)
         self.halo_icon_label.setScaledContents(True)
 
-        top_row_layout.addWidget(self.unread_btn, alignment=Qt.AlignVCenter)
+        top_row_layout.addWidget(self.mark_all_btn, alignment=Qt.AlignVCenter)
         top_row_layout.addWidget(self.add_btn, alignment=Qt.AlignVCenter)
         top_row_layout.addWidget(self.halo_icon_label, alignment=Qt.AlignVCenter)
+        top_row_layout.addWidget(self.unread_btn, alignment=Qt.AlignVCenter)
         top_row_layout.addStretch()
         top_row.setLayout(top_row_layout)
+
         rp_layout.addStretch()
         rp_layout.addWidget(top_row, alignment=Qt.AlignHCenter)
         rp_layout.addStretch()
         self.right_pane.setLayout(rp_layout)
-        self.right_pane.setMinimumWidth(third_w)
-        self.right_pane.setMaximumWidth(third_w)
 
-        # assemble layout
+        # tylko ta zmiana: +100 px szerokości prawego panelu
+        right_pane_w = third_w + 100
+        self.right_pane.setMinimumWidth(right_pane_w)
+        self.right_pane.setMaximumWidth(right_pane_w)
+
         layout.addWidget(self.icon_btn, 0, Qt.AlignTop)
         for b in self.link_btns:
             layout.addWidget(b, 0, Qt.AlignTop)
@@ -315,22 +344,18 @@ class Halo:
         layout.addWidget(num_col_widget, 0, Qt.AlignTop)
         layout.addWidget(self.msg_label, 0, Qt.AlignTop)
         layout.addWidget(self.right_pane, 0, Qt.AlignTop)
-        self.widget.setLayout(layout)
 
-        # toolbar add
+        self.widget.setLayout(layout)
         self.toolbar.addWidget(self.widget)
         self.iface.mainWindow().addToolBar(self.toolbar)
 
-        # connect navigation
         self.btn_up.clicked.connect(self.prev_entry)
         self.btn_down.clicked.connect(self.next_entry)
 
-        # wheel filter
         self.wheel_filter = WheelFilter(self)
         self.num_btn.installEventFilter(self.wheel_filter)
         self.msg_label.installEventFilter(self.wheel_filter)
 
-        # filesystem watcher
         try:
             if self.filepath and os.path.exists(self.filepath):
                 self.fs_watcher.addPath(self.filepath)
@@ -338,9 +363,8 @@ class Halo:
         except Exception:
             pass
 
-        # load saved quick links and webapp/settings/form url
         self._load_saved_links()
-        # ensure add_btn tooltip shows current form link if present
+
         try:
             form_link = str(self.settings.value(self._form_url_key, '') or '')
             if form_link:
@@ -348,7 +372,6 @@ class Halo:
         except Exception:
             pass
 
-        # if a webapp url is saved and non-empty, ensure auto refresh runs
         try:
             weburl = self.settings.value(self._webapp_url_key, '')
             if weburl:
@@ -356,29 +379,26 @@ class Halo:
         except Exception:
             pass
 
-        # initial load
         self.reload_entries()
 
-    # ---------- choose_file (was missing) ----------
     def choose_file(self):
-        """
-        Left-click handler for icon button. Shows the same menu as right-click.
-        Kept as a separate method so hooking remains intuitive for left-click.
-        """
         try:
             pos = self.icon_btn.rect().bottomLeft()
             self._icon_context_menu(pos)
         except Exception:
             try:
                 start_dir = os.path.dirname(self.filepath) if self.filepath and os.path.exists(self.filepath) else os.path.expanduser('~')
-                fn, _ = QFileDialog.getOpenFileName(self.iface.mainWindow(), 'Wybierz plik z komunikatami', start_dir,
-                                                   'All files (*);;Text files (*.txt);;CSV files (*.csv);;Excel files (*.xlsx *.xls)')
+                fn, _ = QFileDialog.getOpenFileName(
+                    self.iface.mainWindow(),
+                    'Wybierz plik z komunikatami',
+                    start_dir,
+                    'All files (*);;Text files (*.txt);;CSV files (*.csv);;Excel files (*.xlsx *.xls)'
+                )
                 if fn:
                     self._set_new_source(fn)
             except Exception:
                 pass
 
-    # ---------- icon context menu: choose file / set webapp ----------
     def _icon_context_menu(self, pos):
         menu = QMenu(self.icon_btn)
         act_file = menu.addAction("Wybierz plik lokalny...")
@@ -388,13 +408,22 @@ class Halo:
         chosen = menu.exec_(self.icon_btn.mapToGlobal(pos))
         if chosen == act_file:
             start_dir = os.path.dirname(self.filepath) if self.filepath and os.path.exists(self.filepath) else os.path.expanduser('~')
-            fn, _ = QFileDialog.getOpenFileName(self.iface.mainWindow(), 'Wybierz plik z komunikatami', start_dir,
-                                               'All files (*);;Text files (*.txt);;CSV files (*.csv);;Excel files (*.xlsx *.xls)')
+            fn, _ = QFileDialog.getOpenFileName(
+                self.iface.mainWindow(),
+                'Wybierz plik z komunikatami',
+                start_dir,
+                'All files (*);;Text files (*.txt);;CSV files (*.csv);;Excel files (*.xlsx *.xls)'
+            )
             if fn:
                 self._set_new_source(fn)
         elif chosen == act_url:
             current = self.settings.value(self._settings_key, self.filepath)
-            text, ok = QInputDialog.getText(self.iface.mainWindow(), "Wprowadź URL źródła", "Wklej URL (txt/csv/xlsx/google sheet):", text=current)
+            text, ok = QInputDialog.getText(
+                self.iface.mainWindow(),
+                "Wprowadź URL źródła",
+                "Wklej URL (txt/csv/xlsx/google sheet):",
+                text=current
+            )
             if ok:
                 url = text.strip()
                 if url:
@@ -427,7 +456,6 @@ class Halo:
             t = token_edit.text().strip()
             self.settings.setValue(self._webapp_url_key, u)
             self.settings.setValue(self._webapp_token_key, t)
-            # enable auto refresh if webapp specified
             try:
                 if u:
                     self.auto_timer.start()
@@ -438,11 +466,8 @@ class Halo:
                 pass
             dlg.accept()
 
-        def reject():
-            dlg.reject()
-
         bb.accepted.connect(accept)
-        bb.rejected.connect(reject)
+        bb.rejected.connect(lambda: dlg.reject())
         dlg.exec_()
 
     def _set_new_source(self, path_or_url):
@@ -453,16 +478,19 @@ class Halo:
                     self.fs_watcher.removePath(old)
             except Exception:
                 pass
+
             self.filepath = path_or_url
+
             try:
                 if self.filepath and os.path.exists(self.filepath):
                     self.fs_watcher.addPath(self.filepath)
             except Exception:
                 pass
+
             self.settings.setValue(self._settings_key, self.filepath)
             self.index = 0
             self._save_index()
-            # control auto-timer
+
             try:
                 if self.filepath:
                     self.auto_timer.start()
@@ -471,6 +499,7 @@ class Halo:
                         self.auto_timer.stop()
             except Exception:
                 pass
+
             self.reload_entries()
             self._log(f"Nowe źródło ustawione: {path_or_url}")
         except Exception:
@@ -502,7 +531,6 @@ class Halo:
         except Exception:
             pass
 
-    # ---------- add button context / left-click ----------
     def _add_btn_context_menu(self, pos):
         menu = QMenu(self.add_btn)
         act_set_form = menu.addAction("Ustaw link formularza respondenta...")
@@ -510,20 +538,28 @@ class Halo:
         chosen = menu.exec_(self.add_btn.mapToGlobal(pos))
         if chosen == act_set_form:
             current = self.settings.value(self._form_url_key, '')
-            text, ok = QInputDialog.getText(self.iface.mainWindow(), "Wprowadź link formularza", "Wklej URL formularza Google Forms (viewform):", text=str(current))
+            text, ok = QInputDialog.getText(
+                self.iface.mainWindow(),
+                "Wprowadź link formularza",
+                "Wklej URL formularza Google Forms (viewform):",
+                text=str(current)
+            )
             if ok:
                 u = text.strip()
                 self.settings.setValue(self._form_url_key, u)
                 if u:
                     self.add_btn.setToolTip(f"Lewy klik: otwórz formularz: {u}\nPrawy klik: ustaw link formularza.")
                 else:
-                    self.add_btn.setToolTip("Lewy klik: otwórz formularz (jeśli ustawiono) lub Dodaj komunikat. Prawy klik: ustaw link formularza.")
+                    self.add_btn.setToolTip(
+                        "Lewy klik: otwórz formularz (jeśli ustawiono) lub Dodaj komunikat. Prawy klik: ustaw link formularza."
+                    )
         elif chosen == act_clear:
             self.settings.setValue(self._form_url_key, '')
-            self.add_btn.setToolTip("Lewy klik: otwórz formularz (jeśli ustawiono) lub Dodaj komunikat. Prawy klik: ustaw link formularza.")
+            self.add_btn.setToolTip(
+                "Lewy klik: otwórz formularz (jeśli ustawiono) lub Dodaj komunikat. Prawy klik: ustaw link formularza."
+            )
 
     def _on_add_btn_left(self):
-        # if form link set -> open it. otherwise fallback to add dialog
         try:
             form_url = str(self.settings.value(self._form_url_key, '') or '').strip()
             if form_url:
@@ -531,10 +567,8 @@ class Halo:
                 return
         except Exception:
             pass
-        # fallback to add dialog (previous behavior)
         self._on_add_clicked()
 
-    # ---------- quick links ----------
     def _load_saved_links(self):
         try:
             for i, key in enumerate(self._external_link_keys):
@@ -571,10 +605,14 @@ class Halo:
             chosen = menu.exec_(btn.mapToGlobal(pos))
             if chosen == act_type:
                 current = self.settings.value(self._external_link_keys[idx], '')
-                text, ok = QInputDialog.getText(self.iface.mainWindow(), "Wpisz link/ścieżkę", "Wprowadź link lub ścieżkę:", text=current)
+                text, ok = QInputDialog.getText(
+                    self.iface.mainWindow(),
+                    "Wpisz link/ścieżkę",
+                    "Wprowadź link lub ścieżkę:",
+                    text=current
+                )
                 if ok:
-                    new_link = text.strip()
-                    self._save_link_for_index(idx, new_link)
+                    self._save_link_for_index(idx, text.strip())
             elif chosen == act_file:
                 start_dir = os.path.dirname(self.settings.value(self._external_link_keys[idx], '')) or os.path.expanduser('~')
                 fn, _ = QFileDialog.getOpenFileName(self.iface.mainWindow(), "Wybierz plik", start_dir, "Wszystkie pliki (*)")
@@ -595,35 +633,43 @@ class Halo:
             key = self._external_link_keys[idx]
             stored = self.settings.value(key, '')
             if not stored:
-                QMessageBox.information(self.iface.mainWindow(), "Brak przypisania", "Nie ustawiono przypisania dla tego przycisku. Ustaw prawym przyciskiem myszy.")
+                QMessageBox.information(
+                    self.iface.mainWindow(),
+                    "Brak przypisania",
+                    "Nie ustawiono przypisania dla tego przycisku. Ustaw prawym przyciskiem myszy."
+                )
                 return
+
             candidate = stored.strip()
             candidate_expanded = os.path.expanduser(candidate)
             candidate_norm = os.path.normpath(candidate_expanded)
+
             if os.path.exists(candidate_norm):
-                q = QUrl.fromLocalFile(candidate_norm)
-                QDesktopServices.openUrl(q)
+                QDesktopServices.openUrl(QUrl.fromLocalFile(candidate_norm))
                 return
+
             q = QUrl(candidate)
             if q.isValid() and q.scheme():
                 QDesktopServices.openUrl(q)
                 return
+
             if "://" not in candidate:
                 candidate_http = "http://" + candidate
             else:
                 candidate_http = candidate
+
             q2 = QUrl(candidate_http)
             if q2.isValid():
                 QDesktopServices.openUrl(q2)
                 return
+
             QMessageBox.warning(self.iface.mainWindow(), "Nie można otworzyć", f"Nie udało się otworzyć przypisania:\n{stored}")
         except Exception:
             QMessageBox.warning(self.iface.mainWindow(), "Błąd", "Nie udało się otworzyć przypisania.")
 
-    # ---------- file parsing and spreadsheet helpers ----------
     def _looks_like_spreadsheet(self, path_or_url):
         lower = (path_or_url or "").lower()
-        if lower.startswith("http://") or lower.startswith("https://"):
+        if lower.startswith("http://") or lower.startswith("https://") or lower.endswith(".csv"):
             return True
         for ext in ('.xlsx', '.xls', '.csv'):
             if lower.endswith(ext):
@@ -631,9 +677,10 @@ class Halo:
         return False
 
     def _load_from_spreadsheet(self, path_or_url):
-        # Special-case: if we have a docs.google.com spreadsheet link AND a respondent form URL is configured,
-        # treat it as Google Forms responses sheet (A=time, B=text, C=signature).
-        is_google_sheet = (path_or_url or '').lower().startswith(('http://', 'https://')) and 'docs.google.com/spreadsheets' in (path_or_url or '').lower()
+        is_google_sheet = (
+            (path_or_url or '').lower().startswith(('http://', 'https://'))
+            and 'docs.google.com/spreadsheets' in (path_or_url or '').lower()
+        )
         form_configured = bool(str(self.settings.value(self._form_url_key, '') or '').strip())
         try:
             if (path_or_url or "").lower().startswith(('http://', 'https://')):
@@ -641,22 +688,18 @@ class Halo:
                 if result is None:
                     return []
                 kind, data = result
+
                 if is_google_sheet and form_configured:
-                    # try to parse sheet into rows (xlsx or csv) and use forms-responses mapping
                     if kind == 'csv':
                         text = data.decode('utf-8-sig', errors='replace')
-                        # parse CSV rows
-                        f = io.StringIO(text)
-                        reader = csv.reader(f)
-                        rows = list(reader)
+                        rows = list(csv.reader(io.StringIO(text)))
                         return self._entries_from_forms_responses(rows)
                     elif kind == 'xlsx':
                         if openpyxl is None:
                             self.msg_label.setText("Plik XLSX pobrany, ale brak biblioteki openpyxl")
                             return []
                         try:
-                            bio = io.BytesIO(data)
-                            wb = openpyxl.load_workbook(bio, read_only=True, data_only=True)
+                            wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
                             ws = wb.active
                             rows = list(ws.iter_rows(values_only=True))
                             return self._entries_from_forms_responses(rows)
@@ -668,19 +711,16 @@ class Halo:
                         self.msg_label.setText("Nieznany typ pliku z URL")
                         self._log("Nieznany typ pliku z URL", Qgis.Warning)
                         return []
-                # otherwise fallback to general parsing
+
                 if kind == 'csv':
                     text = data.decode('utf-8-sig', errors='replace')
-                    f = io.StringIO(text)
-                    reader = csv.DictReader(f)
-                    return self._entries_from_dictreader(reader)
+                    return self._entries_from_dictreader(csv.DictReader(io.StringIO(text)))
                 elif kind == 'xlsx':
                     if openpyxl is None:
                         self.msg_label.setText("Plik XLSX pobrany, ale brak biblioteki openpyxl")
                         return []
                     try:
-                        bio = io.BytesIO(data)
-                        wb = openpyxl.load_workbook(bio, read_only=True, data_only=True)
+                        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
                         ws = wb.active
                         rows = list(ws.iter_rows(values_only=True))
                         return self._entries_from_rows(rows)
@@ -692,22 +732,21 @@ class Halo:
                     self.msg_label.setText("Nieznany typ pliku z URL")
                     self._log("Nieznany typ pliku z URL", Qgis.Warning)
                     return []
-            # local files handling (unchanged)
+
             lower = path_or_url.lower()
             if lower.endswith('.csv'):
                 try:
                     with open(path_or_url, 'r', encoding='utf-8', newline='') as fh:
-                        reader = csv.DictReader(fh)
-                        return self._entries_from_dictreader(reader)
+                        return self._entries_from_dictreader(csv.DictReader(fh))
                 except Exception:
                     try:
                         with open(path_or_url, 'r', encoding='cp1250', newline='') as fh:
-                            reader = csv.DictReader(fh)
-                            return self._entries_from_dictreader(reader)
+                            return self._entries_from_dictreader(csv.DictReader(fh))
                     except Exception as e:
                         self.msg_label.setText("Błąd czytania CSV")
                         self._log(f"Błąd czytania CSV: {e}", Qgis.Warning)
                         return []
+
             if lower.endswith(('.xlsx', '.xls')):
                 if openpyxl is None:
                     self.num_btn.setText('#')
@@ -718,7 +757,6 @@ class Halo:
                     wb = openpyxl.load_workbook(path_or_url, read_only=True, data_only=True)
                     ws = wb.active
                     rows = list(ws.iter_rows(values_only=True))
-                    # if local xlsx and form_configured and it looks like a forms responses sheet, allow mapping
                     if form_configured and 'docs.google.com/spreadsheets' in str(path_or_url).lower():
                         return self._entries_from_forms_responses(rows)
                     return self._entries_from_rows(rows)
@@ -726,6 +764,7 @@ class Halo:
                     self.msg_label.setText("Błąd czytania pliku Excel")
                     self._log(f"Błąd czytania pliku Excel: {e}", Qgis.Critical)
                     return []
+
             return []
         except Exception as e:
             self.msg_label.setText("Błąd pobierania/parsingu arkusza")
@@ -733,27 +772,17 @@ class Halo:
             return []
 
     def _entries_from_forms_responses(self, rows):
-        """
-        Interpret rows as Google Forms responses:
-        - first row is header -> skip
-        - column A (index 0) = timestamp (used to compute date)
-        - column B (index 1) = text (message)
-        - column C (index 2) = signature (to be appended as ' ~signature' italic)
-        - number = sheet_row_number - 1  (fixed per user's correction)
-        """
         entries = []
         if not rows or len(rows) < 2:
             return entries
-        # rows is list-like; first row = headers
         for idx, r in enumerate(rows):
-            # idx is 0-based in rows list; sheet_row_number = idx + 1
             if idx == 0:
-                continue  # header
-            # safeguard row length
+                continue
             try:
                 timestamp = ''
                 text = ''
                 signature = ''
+
                 if isinstance(r, (list, tuple)):
                     if len(r) > 0 and r[0] is not None:
                         timestamp = str(r[0]).strip()
@@ -762,29 +791,19 @@ class Halo:
                     if len(r) > 2 and r[2] is not None:
                         signature = str(r[2]).strip()
                 else:
-                    # single-cell row?
                     text = str(r) if r is not None else ''
-                # compute sheet_row_number (1-based): idx + 1
+
                 sheet_row_number = idx + 1
                 try:
-                    # corrected calculation: numer = numer_wiersza - 1
                     num_val = int(sheet_row_number) - 1
                     if num_val < 1:
                         num_val = 1
                     num = str(num_val)
                 except Exception:
                     num = str(max(1, sheet_row_number - 1))
-                # parse timestamp
+
                 dt = self._try_parse_any_datetime(timestamp)
-                # assemble message: text + " ~signature" italic
-                msg_html = ''
-                if text is None:
-                    text = ''
-                # attach signature if present
-                if signature:
-                    msg_html = f"{str(text)} <i>~{signature}</i>"
-                else:
-                    msg_html = f"{str(text)}"
+                msg_html = f"{str(text)} <i>~{signature}</i>" if signature else f"{str(text)}"
                 entries.append((num, dt, timestamp, msg_html))
             except Exception:
                 continue
@@ -795,18 +814,21 @@ class Halo:
             return []
         header_row_idx = None
         headers = None
+
         for idx, row in enumerate(rows):
             if not row:
                 continue
-            normalized = [ (str(c).strip() if c is not None else '').lower() for c in row ]
+            normalized = [(str(c).strip() if c is not None else '').lower() for c in row]
             text_join = ' '.join(normalized)
             if any(tok in text_join for tok in ('nr', 'no', 'number', 'lp', 'id', 'time', 'text', 'message', 'treść', 'tresc', 'date', 'czas')):
                 header_row_idx = idx
                 headers = normalized
                 break
+
         if headers is None:
-            headers = [ (str(c).strip() if c is not None else '').lower() for c in rows[0] ]
+            headers = [(str(c).strip() if c is not None else '').lower() for c in rows[0]]
             header_row_idx = 0
+
         col_map = {}
         for i, h in enumerate(headers):
             if h in ('nr', 'no', 'number', 'lp', 'id', 'idnr'):
@@ -815,6 +837,7 @@ class Halo:
                 col_map['time'] = i
             elif h in ('text', 'message', 'treść', 'tresc'):
                 col_map['text'] = i
+
         if 'nr' not in col_map:
             for i, h in enumerate(headers):
                 if any(p in h for p in ('nr', 'no', 'num', 'lp', 'id')):
@@ -830,20 +853,24 @@ class Halo:
                 if any(p in h for p in ('text', 'message', 'tre', 'tresc')):
                     col_map['text'] = i
                     break
+
         entries = []
-        data_rows = rows[header_row_idx+1:]
+        data_rows = rows[header_row_idx + 1:]
         for ridx, r in enumerate(data_rows):
             if r is None:
                 continue
-            if all((c is None or str(c).strip()=='') for c in r):
+            if all((c is None or str(c).strip() == '') for c in r):
                 continue
+
             num = ''
             raw_time = ''
             dt = None
+
             if 'nr' in col_map and col_map['nr'] < len(r):
                 val = r[col_map['nr']]
                 if val is not None:
                     num = str(val).strip()
+
             if not num:
                 for c in r:
                     if c is None:
@@ -854,6 +881,7 @@ class Halo:
                         break
             if not num:
                 num = str(ridx + 1)
+
             if 'time' in col_map and col_map['time'] < len(r):
                 rt = r[col_map['time']]
                 if isinstance(rt, datetime):
@@ -862,6 +890,7 @@ class Halo:
                 elif rt is not None:
                     raw_time = str(rt).strip()
                     dt = self._try_parse_any_datetime(raw_time)
+
             msg = ''
             if 'text' in col_map and col_map['text'] < len(r):
                 tv = r[col_map['text']]
@@ -871,6 +900,7 @@ class Halo:
                     if c is not None and str(c).strip():
                         msg = str(c)
                         break
+
             entries.append((num, dt, raw_time, msg))
         return entries
 
@@ -880,6 +910,7 @@ class Halo:
         idx_nr = None
         idx_time = None
         idx_text = None
+
         for i, name in enumerate(norm):
             if name in ('nr', 'no', 'number', 'lp', 'id'):
                 idx_nr = fieldnames[i]
@@ -887,18 +918,22 @@ class Halo:
                 idx_time = fieldnames[i]
             elif name in ('text', 'message', 'treść', 'tresc'):
                 idx_text = fieldnames[i]
+
         if idx_nr is None:
             for i, name in enumerate(norm):
                 if any(p in name for p in ('nr', 'no', 'num', 'lp', 'id')):
-                    idx_nr = fieldnames[i]; break
+                    idx_nr = fieldnames[i]
+                    break
         if idx_time is None:
             for i, name in enumerate(norm):
                 if any(p in name for p in ('time', 'date', 'czas', 'timestamp', 'data')):
-                    idx_time = fieldnames[i]; break
+                    idx_time = fieldnames[i]
+                    break
         if idx_text is None:
             for i, name in enumerate(norm):
                 if any(p in name for p in ('text', 'message', 'tre', 'tresc', 'komunikat')):
-                    idx_text = fieldnames[i]; break
+                    idx_text = fieldnames[i]
+                    break
 
         entries = []
         row_index = 0
@@ -909,6 +944,7 @@ class Halo:
                 raw_time_str = ''
                 dt = None
                 msg = ''
+
                 if idx_nr and idx_nr in row:
                     num = str(row[idx_nr]).strip()
                 if not num:
@@ -921,12 +957,14 @@ class Halo:
                             break
                 if not num:
                     num = str(row_index)
+
                 if idx_time and idx_time in row:
                     raw_time_str = str(row[idx_time]).strip()
                     dt = self._try_parse_any_datetime(raw_time_str)
                 else:
                     raw_time_str = ''
                     dt = None
+
                 if idx_text and idx_text in row:
                     v = row[idx_text]
                     msg = '' if v is None else str(v)
@@ -937,6 +975,7 @@ class Halo:
                         msg = '' if v is None else str(v)
                     else:
                         msg = ''
+
                 entries.append((num, dt, raw_time_str, msg))
             except Exception:
                 continue
@@ -948,6 +987,7 @@ class Halo:
         txt = str(text).strip()
         if not txt:
             return None
+
         fmts = [
             "%H:%M %d.%m.%Y",
             "%d.%m.%Y %H:%M",
@@ -969,14 +1009,13 @@ class Halo:
                 return datetime.strptime(txt, f)
             except Exception:
                 continue
+
         try:
-            t2 = txt.replace('Z', '')
-            return datetime.fromisoformat(t2)
+            return datetime.fromisoformat(txt.replace('Z', ''))
         except Exception:
             return None
 
     def _parse_file(self):
-        # legacy parsing for local text format with blocks separated by lines '***'
         entries = []
         try:
             if not os.path.exists(self.filepath):
@@ -1001,16 +1040,14 @@ class Halo:
                                 num = parts[0].strip()
                                 raw_date = parts[1].strip()
                                 first_msg_part = parts[2].rstrip()
-                                remaining = []
-                                if first_idx is not None and first_idx + 1 < len(block):
-                                    remaining = block[first_idx + 1:]
-                                all_msg_lines = [first_msg_part] + remaining
-                                msg = '\n'.join(all_msg_lines).strip()
+                                remaining = block[first_idx + 1:] if first_idx is not None and first_idx + 1 < len(block) else []
+                                msg = '\n'.join([first_msg_part] + remaining).strip()
                                 dt = self._try_parse_any_datetime(raw_date)
                                 entries.append((num, dt, raw_date, msg))
                         block = []
                 else:
                     block.append(line)
+
             if block:
                 first_line = None
                 first_idx = None
@@ -1025,18 +1062,14 @@ class Halo:
                         num = parts[0].strip()
                         raw_date = parts[1].strip()
                         first_msg_part = parts[2].rstrip()
-                        remaining = []
-                        if first_idx is not None and first_idx + 1 < len(block):
-                            remaining = block[first_idx + 1:]
-                        all_msg_lines = [first_msg_part] + remaining
-                        msg = '\n'.join(all_msg_lines).strip()
+                        remaining = block[first_idx + 1:] if first_idx is not None and first_idx + 1 < len(block) else []
+                        msg = '\n'.join([first_msg_part] + remaining).strip()
                         dt = self._try_parse_any_datetime(raw_date)
                         entries.append((num, dt, raw_date, msg))
         except Exception:
             pass
         return entries
 
-    # ---------- fetch robust downloader (HTTP heuristics for sheets, OneDrive etc.) ----------
     def _fetch_csv_from_url(self, url):
         debug = []
         try:
@@ -1117,12 +1150,14 @@ class Halo:
                             code = resp.getcode()
                         except Exception:
                             code = None
+
                         info = resp.info()
                         content_type = ''
                         try:
                             content_type = info.get_content_type()
                         except Exception:
                             content_type = info.get('Content-Type', '') or ''
+
                         data = resp.read()
                         length = len(data)
                         debug.append(f"HTTP {code}  Content-Type: {content_type}  Rozmiar: {length} bytes")
@@ -1189,7 +1224,11 @@ class Halo:
                                 except Exception as e2:
                                     debug.append(f"Błąd pobierania linku do pliku w HTML: {e2}")
 
-                            m_js = re.search(r'(?:location\.replace|window\.location\.href|window\.location)\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)', s, re.I)
+                            m_js = re.search(
+                                r'(?:location\.replace|window\.location\.href|window\.location)\s*\(\s*[\'"]([^\'"]+)[\'"]\s*\)',
+                                s,
+                                re.I
+                            )
                             if not m_js:
                                 m_js = re.search(r'window\.location\s*=\s*[\'"]([^\'"]+)[\'"]', s, re.I)
                             if m_js:
@@ -1230,20 +1269,21 @@ class Halo:
 
             self._log("Nie udało się pobrać pliku z żadnego z kandydatów. Sprawdź uprawnienia/URL.", Qgis.Warning)
             if 'docs.google.com' in u0:
-                hint = ("Google zwrócił stronę zamiast pliku. Upewnij się, że arkusz jest udostępniony lub opublikowany (Publish to web) "
-                        "lub użyj WebApp (Apps Script) do zapisu/odczytu).")
-                self._log(hint, Qgis.Warning)
+                self._log(
+                    "Google zwrócił stronę zamiast pliku. Upewnij się, że arkusz jest udostępniony lub opublikowany (Publish to web) lub użyj WebApp.",
+                    Qgis.Warning
+                )
             if '1drv.ms' in u0 or 'onedrive.live.com' in u0:
-                hint2 = ("OneDrive może wymagać bezpośredniego linku do pobrania (direct).")
-                self._log(hint2, Qgis.Warning)
+                self._log("OneDrive może wymagać bezpośredniego linku do pobrania (direct).", Qgis.Warning)
+
             for d in debug:
                 QgsMessageLog.logMessage(d, 'Halo', Qgis.Info)
+
             return None
         except Exception as ex:
             self._log(f"Wyjątek podczas pobierania URL: {ex}", Qgis.Critical)
             return None
 
-    # ---------- show / navigation / state ----------
     def _load_read_map(self):
         try:
             raw = self.settings.value(self._read_map_key, '')
@@ -1260,11 +1300,7 @@ class Halo:
             mapping = {}
             for idx, e in enumerate(self.entries):
                 num = e[0]
-                flag = 0
-                try:
-                    flag = 1 if self.read_flags[idx] else 0
-                except Exception:
-                    flag = 0
+                flag = 1 if idx < len(self.read_flags) and self.read_flags[idx] else 0
                 mapping[str(num)] = flag
             self.settings.setValue(self._read_map_key, json.dumps(mapping))
         except Exception:
@@ -1277,15 +1313,12 @@ class Halo:
             pass
 
     def _on_file_changed(self, path):
-        # filesystem watcher -> reload
         self.reload_entries()
 
     def reload_entries(self):
-        # reset unread cycling pointer on structural change
         self._last_unread_pos = -1
 
         if not self.filepath:
-            # no source configured
             self.entries = []
             self.index = 0
             self.read_flags = []
@@ -1302,10 +1335,7 @@ class Halo:
             return
 
         try:
-            if self._looks_like_spreadsheet(self.filepath):
-                new_entries = self._load_from_spreadsheet(self.filepath)
-            else:
-                new_entries = self._parse_file()
+            new_entries = self._load_from_spreadsheet(self.filepath) if self._looks_like_spreadsheet(self.filepath) else self._parse_file()
         except Exception:
             new_entries = []
 
@@ -1322,12 +1352,7 @@ class Halo:
         self.entries = new_entries
         self.read_flags = []
         for e in self.entries:
-            num = e[0]
-            try:
-                num_str = str(num)
-            except Exception:
-                num_str = ''
-            flag = False
+            num_str = str(e[0]) if e and e[0] is not None else ''
             if num_str in persisted:
                 try:
                     flag = bool(int(persisted[num_str]))
@@ -1372,12 +1397,11 @@ class Halo:
     def _set_num_button_style(self, is_read: bool):
         name = self.num_btn.objectName() or "halo_num_btn"
         color = "black" if is_read else "red"
-        ss = (
+        self.num_btn.setStyleSheet(
             f"#{name} {{ color: {color}; background: transparent; border: none; }}"
             f"#{name}:hover {{ background: transparent; }}"
             f"#{name}:focus {{ outline: none; background: transparent; }}"
         )
-        self.num_btn.setStyleSheet(ss)
 
     def _unread_count(self):
         try:
@@ -1389,10 +1413,7 @@ class Halo:
         try:
             unread = self._unread_count()
             self.unread_btn.setText(f"Nieprzeczytane: {unread}")
-            if unread > 0:
-                self.unread_btn.setStyleSheet("color: red;")
-            else:
-                self.unread_btn.setStyleSheet("color: green;")
+            self.unread_btn.setStyleSheet("color: red;" if unread > 0 else "color: green;")
         except Exception:
             try:
                 self.unread_btn.setText("Nieprzeczytane: 0")
@@ -1405,8 +1426,6 @@ class Halo:
         if unread > 0 and self._halo_colored:
             if not self.halo_blink_timer.isActive():
                 self.halo_blink_timer.start()
-        elif unread > 0 and not self._halo_colored:
-            self.halo_icon_label.setPixmap(QPixmap())
         else:
             if self.halo_blink_timer.isActive():
                 self.halo_blink_timer.stop()
@@ -1427,20 +1446,22 @@ class Halo:
 
     def _on_blink_timeout(self):
         self._blink_state = not self._blink_state
-        if self._blink_state:
-            self.btn_down.setStyleSheet("background-color: red; color: white;")
-        else:
-            self.btn_down.setStyleSheet("")
+        self.btn_down.setStyleSheet("background-color: red; color: white;" if self._blink_state else "")
 
     def _on_halo_blink(self):
         self._halo_blink_state = not self._halo_blink_state
         if self._halo_blink_state:
             if self._halo_colored:
-                self.halo_icon_label.setPixmap(self._halo_colored.scaled(self.halo_icon_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                self.halo_icon_label.setPixmap(
+                    self._halo_colored.scaled(
+                        self.halo_icon_label.size(),
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation
+                    )
+                )
             else:
                 self.halo_icon_label.setPixmap(QPixmap())
         else:
-            # toggle off
             self.halo_icon_label.setPixmap(QPixmap())
 
     def show_current(self):
@@ -1460,23 +1481,19 @@ class Halo:
             return
 
         num, dt_obj, raw_date, msg_html = self.entries[self.index]
-        if num is None or str(num).strip() == '':
-            num_display = str(self.index + 1)
-        else:
-            num_display = str(num)
-        self.num_btn.setText(num_display)
-        try:
-            is_read = bool(self.read_flags[self.index])
-        except Exception:
-            is_read = False
-        self._set_num_button_style(is_read=is_read)
 
-        # date: show only DD mmm YY, tooltip full DD.MM.YYYY HH:MM if available
+        self.num_btn.setText(str(num) if num is not None and str(num).strip() else str(self.index + 1))
+        try:
+            self._set_num_button_style(is_read=bool(self.read_flags[self.index]))
+        except Exception:
+            self._set_num_button_style(is_read=False)
+
         short_date = ""
         tooltip_date = ""
+
         if dt_obj:
             try:
-                short_date = f"{dt_obj.day:02d} {self._months_pl[dt_obj.month-1]} {str(dt_obj.year)[-2:]}"
+                short_date = f"{dt_obj.day:02d} {self._months_pl[dt_obj.month - 1]} {str(dt_obj.year)[-2:]}"
                 tooltip_date = dt_obj.strftime("%d.%m.%Y %H:%M")
             except Exception:
                 short_date = ""
@@ -1485,7 +1502,7 @@ class Halo:
             parsed = self._try_parse_any_datetime(raw_date)
             if parsed:
                 try:
-                    short_date = f"{parsed.day:02d} {self._months_pl[parsed.month-1]} {str(parsed.year)[-2:]}"
+                    short_date = f"{parsed.day:02d} {self._months_pl[parsed.month - 1]} {str(parsed.year)[-2:]}"
                 except Exception:
                     short_date = raw_date.split()[0]
                 tooltip_date = raw_date
@@ -1494,24 +1511,18 @@ class Halo:
                 parsed2 = self._try_parse_any_datetime(token)
                 if parsed2:
                     try:
-                        short_date = f"{parsed2.day:02d} {self._months_pl[parsed2.month-1]} {str(parsed2.year)[-2:]}"
+                        short_date = f"{parsed2.day:02d} {self._months_pl[parsed2.month - 1]} {str(parsed2.year)[-2:]}"
                     except Exception:
                         short_date = token
                 else:
                     short_date = token
                 tooltip_date = raw_date
-        else:
-            short_date = ""
-            tooltip_date = ""
 
         self.date_label.setText(short_date)
         self.date_label.setToolTip(tooltip_date)
 
-        # message content: msg_html may already contain <i> for signature and may contain newlines
         try:
-            # convert plain newlines to <br>, but avoid double-escaping if already HTML-ish
-            display_html = str(msg_html).replace('\n', '<br>')
-            self.msg_label.setText(display_html)
+            self.msg_label.setText(str(msg_html).replace('\n', '<br>'))
         except Exception:
             self.msg_label.setText(str(msg_html))
 
@@ -1559,6 +1570,7 @@ class Halo:
         if not unread_indices:
             QMessageBox.information(self.iface.mainWindow(), "Brak nieprzeczytanych", "Wszystkie komunikaty oznaczone jako przeczytane.")
             return
+
         next_pos = 0
         if self._last_unread_pos != -1:
             try:
@@ -1570,14 +1582,30 @@ class Halo:
                     next_pos = 0
             except Exception:
                 next_pos = 0
-        else:
-            next_pos = 0
+
         target_entry_idx = unread_indices[next_pos]
         self.index = target_entry_idx
         self.show_current()
         self._last_unread_pos = target_entry_idx
 
-    # ---------- auto-refresh ----------
+    def _on_mark_all_clicked(self):
+        if not self.entries:
+            return
+        try:
+            unread = [i for i, v in enumerate(self.read_flags) if not v]
+            if unread:
+                for i in range(len(self.read_flags)):
+                    self.read_flags[i] = True
+            else:
+                for i in range(len(self.read_flags)):
+                    self.read_flags[i] = False
+            self._save_read_map()
+            self._update_unread_label()
+            self._update_halo_icon()
+            self.show_current()
+        except Exception as e:
+            self._log(f"Error in _on_mark_all_clicked: {e}", Qgis.Warning)
+
     def _on_auto_refresh(self):
         if self._is_refreshing:
             return
@@ -1589,21 +1617,23 @@ class Halo:
         finally:
             self._is_refreshing = False
 
-    # ---------- add message dialog and append logic (unchanged) ----------
     def _on_add_clicked(self):
         dlg = QDialog(self.iface.mainWindow())
         dlg.setWindowTitle("Dodaj komunikat")
         v = QVBoxLayout()
+
         te = QTextEdit()
         te.setPlaceholderText("Wpisz treść komunikatu (wiele wierszy)...")
         te.setMinimumSize(420, 220)
         v.addWidget(te)
+
         sig = QLineEdit()
         sig.setPlaceholderText("Podpis (zapamiętany)...")
         saved_sig = self.settings.value(self._signature_key, '')
         if saved_sig:
             sig.setText(saved_sig)
         v.addWidget(sig)
+
         bb = QDialogButtonBox()
         send_btn = bb.addButton("Wyślij 🚀", QDialogButtonBox.AcceptRole)
         cancel_btn = bb.addButton(QDialogButtonBox.Cancel)
@@ -1616,16 +1646,18 @@ class Halo:
             if not message_text:
                 QMessageBox.warning(self.iface.mainWindow(), "Brak treści", "Wprowadź treść komunikatu przed wysłaniem.")
                 return
+
             try:
                 if signature_text:
                     self.settings.setValue(self._signature_key, signature_text)
             except Exception:
                 pass
-            # assemble message with optional signature
+
             lines = [ln.rstrip() for ln in message_text.splitlines()]
             if signature_text:
                 lines.append(f"-- {signature_text}")
             full_msg = "\n".join(lines).strip()
+
             success, info = self._append_new_entry(full_msg)
             if success:
                 QMessageBox.information(self.iface.mainWindow(), "Wysłano", "Komunikat został dodany.")
@@ -1641,50 +1673,33 @@ class Halo:
                 QMessageBox.warning(self.iface.mainWindow(), "Niepowodzenie", f"Nie udało się dodać komunikatu.\n{info}")
                 self._log(f"Append failed: {info}", Qgis.Warning)
 
-        def on_cancel():
-            dlg.reject()
-
         send_btn.clicked.connect(on_send)
-        cancel_btn.clicked.connect(on_cancel)
+        cancel_btn.clicked.connect(lambda: dlg.reject())
         dlg.exec_()
 
     def _append_new_entry(self, message_text: str):
-        """
-        Append new entry: tries local append, then WebApp POST (if configured), then PUT fallback.
-        Returns (True, info) on success, (False, info) on failure.
-        """
         try:
-            # new num computation
-            new_num = None
             numeric_vals = []
             for e in self.entries:
                 try:
-                    n = int(str(e[0]).strip())
-                    numeric_vals.append(n)
+                    numeric_vals.append(int(str(e[0]).strip()))
                 except Exception:
                     continue
-            if numeric_vals:
-                new_num = max(numeric_vals) + 1
-            else:
-                new_num = len(self.entries) + 1
 
-            now = datetime.now()
-            date_str = now.strftime("%H:%M %d.%m.%Y")
+            new_num = max(numeric_vals) + 1 if numeric_vals else len(self.entries) + 1
+            date_str = datetime.now().strftime("%H:%M %d.%m.%Y")
 
             lines = message_text.splitlines()
             first_line = lines[0] if lines else ""
             remaining = lines[1:] if len(lines) > 1 else []
-            block_lines = []
-            block_lines.append(f"{new_num};{date_str};{first_line}")
-            for r in remaining:
-                block_lines.append(r)
+
+            block_lines = [f"{new_num};{date_str};{first_line}"]
+            block_lines.extend(remaining)
             block_lines.append("***")
             block_text = "\n".join(block_lines) + "\n"
 
-            # 1) if local file path -> append
             if self.filepath and os.path.exists(self.filepath):
                 try:
-                    # ensure newline before append if needed
                     with open(self.filepath, "ab") as fhb:
                         try:
                             fhb.seek(-1, os.SEEK_END)
@@ -1701,10 +1716,8 @@ class Halo:
                 except Exception as e:
                     return False, f"Błąd zapisu lokalnego: {e}"
 
-            # 2) if user configured WebApp URL -> POST to it
             webapp_url = str(self.settings.value(self._webapp_url_key, '')).strip()
             webapp_token = str(self.settings.value(self._webapp_token_key, '')).strip()
-            # also accept if the current source (filepath) is a webapp URL
             if not webapp_url and self.filepath and 'script.google.com' in self.filepath:
                 webapp_url = self.filepath
                 webapp_token = str(self.settings.value(self._webapp_token_key, '')).strip()
@@ -1713,13 +1726,10 @@ class Halo:
                 ok, info = self._post_to_webapp(webapp_url, webapp_token, message_text, new_num)
                 if ok:
                     self._log(f"Dopisano komunikat przez WebApp: {new_num}", Qgis.Info)
-                    # after successful post, reload entries (WebApp should update sheet; plugin will fetch)
                     self.reload_entries()
                     return True, "OK"
-                else:
-                    return False, f"WebApp error: {info}"
+                return False, f"WebApp error: {info}"
 
-            # 3) fallback: try to GET existing textual body then PUT appended body (best-effort)
             if self.filepath and (self.filepath.lower().startswith("http://") or self.filepath.lower().startswith("https://")):
                 fetched = self._fetch_csv_from_url(self.filepath)
                 if fetched is None:
@@ -1727,24 +1737,28 @@ class Halo:
                 kind, data = fetched
                 if kind == 'xlsx':
                     return False, "Zdalny plik XLSX nie może być modyfikowany bez API/OAuth."
+
                 try:
-                    try:
-                        existing_text = data.decode('utf-8')
-                    except Exception:
-                        existing_text = data.decode('utf-8', errors='replace')
+                    existing_text = data.decode('utf-8', errors='replace')
                     if not existing_text.endswith("\n"):
                         existing_text += "\n"
                     new_text = existing_text + block_text
-                    req = urllib.request.Request(self.filepath, data=new_text.encode('utf-8'), method='PUT',
-                                                 headers={'User-Agent': 'HaloPlugin/1.0', 'Content-Type': 'text/plain; charset=utf-8'})
+                    req = urllib.request.Request(
+                        self.filepath,
+                        data=new_text.encode('utf-8'),
+                        method='PUT',
+                        headers={
+                            'User-Agent': 'HaloPlugin/1.0',
+                            'Content-Type': 'text/plain; charset=utf-8'
+                        }
+                    )
                     with urllib.request.urlopen(req, timeout=30) as resp:
                         code = resp.getcode()
                         if 200 <= code < 300:
                             self._log(f"Zaktualizowano zdalny plik (PUT) kod={code}", Qgis.Info)
                             self.reload_entries()
                             return True, "OK"
-                        else:
-                            return False, f"Serwer zwrócił kod {code} przy próbie zapisu."
+                        return False, f"Serwer zwrócił kod {code} przy próbie zapisu."
                 except urllib.error.HTTPError as he:
                     try:
                         body = he.read().decode('utf-8', errors='replace')
@@ -1759,10 +1773,6 @@ class Halo:
             return False, f"Wyjątek: {ex}"
 
     def _post_to_webapp(self, webapp_url, token, text, num=None):
-        """
-        POST JSON to WebApp URL. Expects JSON response.
-        Returns (True, parsed_json_or_message) or (False, message).
-        """
         try:
             payload = {
                 "token": token or "",
@@ -1773,11 +1783,17 @@ class Halo:
                     payload["num"] = int(num)
                 except Exception:
                     payload["num"] = str(num)
+
             data = json.dumps(payload).encode('utf-8')
-            req = urllib.request.Request(webapp_url, data=data, headers={
-                'Content-Type': 'application/json; charset=utf-8',
-                'User-Agent': 'HaloPlugin/1.0'
-            }, method='POST')
+            req = urllib.request.Request(
+                webapp_url,
+                data=data,
+                headers={
+                    'Content-Type': 'application/json; charset=utf-8',
+                    'User-Agent': 'HaloPlugin/1.0'
+                },
+                method='POST'
+            )
             with urllib.request.urlopen(req, timeout=25) as resp:
                 code = resp.getcode()
                 body = resp.read().decode('utf-8', errors='replace')
@@ -1787,8 +1803,7 @@ class Halo:
                     j = {"raw": body}
                 if 200 <= code < 300:
                     return True, j
-                else:
-                    return False, f"HTTP {code}: {body}"
+                return False, f"HTTP {code}: {body}"
         except urllib.error.HTTPError as he:
             try:
                 body = he.read().decode('utf-8', errors='replace')
@@ -1798,17 +1813,10 @@ class Halo:
         except Exception as e:
             return False, f"Exception: {e}"
 
-    # ---------- utility ----------
     def _load_halo_pixmap(self, icon_path):
         try:
             icon = QIcon(icon_path)
-            size = QSize(48, 48)
-            pm = icon.pixmap(size)
-            if pm and not pm.isNull():
-                self._halo_colored = pm
-            else:
-                self._halo_colored = None
+            pm = icon.pixmap(QSize(48, 48))
+            self._halo_colored = pm if pm and not pm.isNull() else None
         except Exception:
             self._halo_colored = None
-
-# End of halo.py
