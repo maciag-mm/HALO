@@ -1,11 +1,11 @@
 [general]
 name=Halo
-description=Pager dla grup operatorów QGIS
-version=2.10
+description=Pager for QGIS operators
+version=2.13
 qgisMinimumVersion=3.34
 author=Michał Maciąg
 email=m.maciag@pbgitr.geodezja.pl
-about=Wtyczka wyświetla umożliwia wyświetlanie i wysyłanie komunikatów dla społeczności operatorów GIS.
+about=Toolkit for communication within QGIS operator teams
 icon=icon.png
 repository=https://github.com/maciag-mm/HALO
 tracker=https://github.com/maciag-mm/HALO/issues

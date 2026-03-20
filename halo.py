@@ -17,9 +17,9 @@ from qgis.PyQt.QtWidgets import (
     QWidget, QLabel, QPushButton, QHBoxLayout,
     QVBoxLayout, QToolBar, QApplication, QSizePolicy,
     QFileDialog, QInputDialog, QMessageBox, QMenu, QDialog,
-    QTextEdit, QLineEdit, QDialogButtonBox
+    QTextEdit, QLineEdit, QDialogButtonBox, QFrame
 )
-from qgis.PyQt.QtGui import QFont, QIcon, QPixmap, QDesktopServices, QFontMetrics
+from qgis.PyQt.QtGui import QFont, QIcon, QPixmap, QDesktopServices
 
 from qgis.core import QgsMessageLog, Qgis
 
@@ -71,6 +71,7 @@ class Halo:
         self.mark_all_folder_label = None
         self.mark_all_tick_label = None
         self.halo_icon_label = None
+        self.connection_led = None
         self.add_btn = None
 
         self.entries = []
@@ -103,6 +104,11 @@ class Halo:
         self.halo_blink_timer.timeout.connect(self._on_halo_blink)
         self._halo_blink_state = False
 
+        self.connection_led_timer = QTimer()
+        self.connection_led_timer.setInterval(550)
+        self.connection_led_timer.timeout.connect(self._on_connection_led_blink)
+        self._connection_led_state = True
+
         self.auto_timer = QTimer()
         self.auto_timer.setInterval(60 * 1000)
         self.auto_timer.timeout.connect(self._on_auto_refresh)
@@ -115,6 +121,64 @@ class Halo:
     def _log(self, message: str, level=Qgis.Info):
         try:
             QgsMessageLog.logMessage(str(message), 'Halo', level)
+        except Exception:
+            pass
+
+    def _set_connection_led_tooltip(self, connected: bool):
+        try:
+            self.connection_led.setToolTip(
+                "Połączenie ze źródłem sprawne" if connected else "Brak połączenia ze źródłem"
+            )
+        except Exception:
+            pass
+
+    def _set_connection_led_ok(self):
+        try:
+            self.connection_led_timer.stop()
+        except Exception:
+            pass
+        try:
+            self.connection_led.setVisible(True)
+            self.connection_led.setStyleSheet(
+                "background-color: #2ecc71;"
+                "border: 1px solid #1f8f4d;"
+                "border-radius: 8px;"
+            )
+            self._set_connection_led_tooltip(True)
+        except Exception:
+            pass
+
+    def _set_connection_led_fail(self):
+        try:
+            self.connection_led_timer.start()
+        except Exception:
+            pass
+        try:
+            self.connection_led.setVisible(True)
+            self.connection_led.setStyleSheet(
+                "background-color: #ff0000;"
+                "border: 1px solid #b00000;"
+                "border-radius: 8px;"
+            )
+            self._set_connection_led_tooltip(False)
+        except Exception:
+            pass
+
+    def _on_connection_led_blink(self):
+        self._connection_led_state = not self._connection_led_state
+        try:
+            if self._connection_led_state:
+                self.connection_led.setStyleSheet(
+                    "background-color: #ff0000;"
+                    "border: 1px solid #b00000;"
+                    "border-radius: 8px;"
+                )
+            else:
+                self.connection_led.setStyleSheet(
+                    "background-color: transparent;"
+                    "border: 1px solid transparent;"
+                    "border-radius: 8px;"
+                )
         except Exception:
             pass
 
@@ -320,9 +384,22 @@ class Halo:
         self.halo_icon_label.setFixedSize(32, 32)
         self.halo_icon_label.setScaledContents(True)
 
+        # większa, pełniej widoczna i okrągła dioda
+        self.connection_led = QFrame()
+        self.connection_led.setFixedSize(14, 14)
+        self.connection_led.setStyleSheet(
+            "background-color: #2ecc71;"
+            "border: 1px solid #1f8f4d;"
+            "border-radius: 7px;"
+        )
+        self._set_connection_led_tooltip(True)
+
         top_row_layout.addWidget(self.mark_all_btn, alignment=Qt.AlignVCenter)
         top_row_layout.addWidget(self.add_btn, alignment=Qt.AlignVCenter)
         top_row_layout.addWidget(self.halo_icon_label, alignment=Qt.AlignVCenter)
+        top_row_layout.addSpacing(5)
+        top_row_layout.addWidget(self.connection_led, alignment=Qt.AlignVCenter)
+        top_row_layout.addSpacing(4)
         top_row_layout.addWidget(self.unread_btn, alignment=Qt.AlignVCenter)
         top_row_layout.addStretch()
         top_row.setLayout(top_row_layout)
@@ -332,7 +409,6 @@ class Halo:
         rp_layout.addStretch()
         self.right_pane.setLayout(rp_layout)
 
-        # tylko ta zmiana: +100 px szerokości prawego panelu
         right_pane_w = third_w + 100
         self.right_pane.setMinimumWidth(right_pane_w)
         self.right_pane.setMaximumWidth(right_pane_w)
@@ -379,7 +455,8 @@ class Halo:
         except Exception:
             pass
 
-        self.reload_entries()
+        self._set_connection_led_ok()
+        self.reload_entries(initial_load=True)
 
     def choose_file(self):
         try:
@@ -500,7 +577,7 @@ class Halo:
             except Exception:
                 pass
 
-            self.reload_entries()
+            self.reload_entries(initial_load=True)
             self._log(f"Nowe źródło ustawione: {path_or_url}")
         except Exception:
             pass
@@ -519,6 +596,11 @@ class Halo:
         try:
             if self.halo_blink_timer.isActive():
                 self.halo_blink_timer.stop()
+        except Exception:
+            pass
+        try:
+            if self.connection_led_timer.isActive():
+                self.connection_led_timer.stop()
         except Exception:
             pass
         try:
@@ -639,30 +721,24 @@ class Halo:
                     "Nie ustawiono przypisania dla tego przycisku. Ustaw prawym przyciskiem myszy."
                 )
                 return
-
             candidate = stored.strip()
             candidate_expanded = os.path.expanduser(candidate)
             candidate_norm = os.path.normpath(candidate_expanded)
-
             if os.path.exists(candidate_norm):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(candidate_norm))
                 return
-
             q = QUrl(candidate)
             if q.isValid() and q.scheme():
                 QDesktopServices.openUrl(q)
                 return
-
             if "://" not in candidate:
                 candidate_http = "http://" + candidate
             else:
                 candidate_http = candidate
-
             q2 = QUrl(candidate_http)
             if q2.isValid():
                 QDesktopServices.openUrl(q2)
                 return
-
             QMessageBox.warning(self.iface.mainWindow(), "Nie można otworzyć", f"Nie udało się otworzyć przypisania:\n{stored}")
         except Exception:
             QMessageBox.warning(self.iface.mainWindow(), "Błąd", "Nie udało się otworzyć przypisania.")
@@ -686,7 +762,7 @@ class Halo:
             if (path_or_url or "").lower().startswith(('http://', 'https://')):
                 result = self._fetch_csv_from_url(path_or_url)
                 if result is None:
-                    return []
+                    return None
                 kind, data = result
 
                 if is_google_sheet and form_configured:
@@ -697,7 +773,7 @@ class Halo:
                     elif kind == 'xlsx':
                         if openpyxl is None:
                             self.msg_label.setText("Plik XLSX pobrany, ale brak biblioteki openpyxl")
-                            return []
+                            return None
                         try:
                             wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
                             ws = wb.active
@@ -706,11 +782,11 @@ class Halo:
                         except Exception as e:
                             self.msg_label.setText("Błąd parsowania XLSX z URL")
                             self._log(f"Błąd parsowania XLSX z URL: {e}", Qgis.Critical)
-                            return []
+                            return None
                     else:
                         self.msg_label.setText("Nieznany typ pliku z URL")
                         self._log("Nieznany typ pliku z URL", Qgis.Warning)
-                        return []
+                        return None
 
                 if kind == 'csv':
                     text = data.decode('utf-8-sig', errors='replace')
@@ -718,7 +794,7 @@ class Halo:
                 elif kind == 'xlsx':
                     if openpyxl is None:
                         self.msg_label.setText("Plik XLSX pobrany, ale brak biblioteki openpyxl")
-                        return []
+                        return None
                     try:
                         wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
                         ws = wb.active
@@ -727,11 +803,11 @@ class Halo:
                     except Exception as e:
                         self.msg_label.setText("Błąd parsowania XLSX z URL")
                         self._log(f"Błąd parsowania XLSX z URL: {e}", Qgis.Critical)
-                        return []
+                        return None
                 else:
                     self.msg_label.setText("Nieznany typ pliku z URL")
                     self._log("Nieznany typ pliku z URL", Qgis.Warning)
-                    return []
+                    return None
 
             lower = path_or_url.lower()
             if lower.endswith('.csv'):
@@ -745,14 +821,14 @@ class Halo:
                     except Exception as e:
                         self.msg_label.setText("Błąd czytania CSV")
                         self._log(f"Błąd czytania CSV: {e}", Qgis.Warning)
-                        return []
+                        return None
 
             if lower.endswith(('.xlsx', '.xls')):
                 if openpyxl is None:
                     self.num_btn.setText('#')
                     self.msg_label.setText("Brak obsługi plików Excel: brakuje biblioteki openpyxl")
                     self._log("Brak biblioteki openpyxl (lokalne XLSX)", Qgis.Warning)
-                    return []
+                    return None
                 try:
                     wb = openpyxl.load_workbook(path_or_url, read_only=True, data_only=True)
                     ws = wb.active
@@ -763,13 +839,13 @@ class Halo:
                 except Exception as e:
                     self.msg_label.setText("Błąd czytania pliku Excel")
                     self._log(f"Błąd czytania pliku Excel: {e}", Qgis.Critical)
-                    return []
+                    return None
 
-            return []
+            return None
         except Exception as e:
             self.msg_label.setText("Błąd pobierania/parsingu arkusza")
             self._log(f"Błąd _load_from_spreadsheet: {e}", Qgis.Critical)
-            return []
+            return None
 
     def _entries_from_forms_responses(self, rows):
         entries = []
@@ -1019,7 +1095,7 @@ class Halo:
         entries = []
         try:
             if not os.path.exists(self.filepath):
-                return entries
+                return None
             with open(self.filepath, "r", encoding="utf-8") as f:
                 lines = [ln.rstrip('\n') for ln in f]
 
@@ -1067,7 +1143,7 @@ class Halo:
                         dt = self._try_parse_any_datetime(raw_date)
                         entries.append((num, dt, raw_date, msg))
         except Exception:
-            pass
+            return None
         return entries
 
     def _fetch_csv_from_url(self, url):
@@ -1315,9 +1391,7 @@ class Halo:
     def _on_file_changed(self, path):
         self.reload_entries()
 
-    def reload_entries(self):
-        self._last_unread_pos = -1
-
+    def reload_entries(self, initial_load=False):
         if not self.filepath:
             self.entries = []
             self.index = 0
@@ -1332,12 +1406,38 @@ class Halo:
             self._save_index()
             self._save_read_map()
             self._update_halo_icon()
+            self._set_connection_led_ok()
             return
 
         try:
             new_entries = self._load_from_spreadsheet(self.filepath) if self._looks_like_spreadsheet(self.filepath) else self._parse_file()
         except Exception:
-            new_entries = []
+            new_entries = None
+
+        if new_entries is None:
+            if not initial_load and self.entries:
+                self._set_connection_led_fail()
+                self._log("Nie udało się odświeżyć danych — zachowuję dotychczasowy widok.", Qgis.Warning)
+                return
+
+            self.entries = []
+            self.index = 0
+            self.read_flags = []
+            self.num_btn.setText('#')
+            self._set_num_button_style(is_read=False)
+            self.date_label.setText("")
+            self.date_label.setToolTip("")
+            self.msg_label.setText('### Brak połączenia ze źródłem ###')
+            self._stop_blink()
+            self._update_unread_label()
+            self._save_index()
+            self._save_read_map()
+            self._update_halo_icon()
+            self._set_connection_led_fail()
+            return
+
+        self._set_connection_led_ok()
+        self._last_unread_pos = -1
 
         persisted = self._load_read_map()
         prev_map = {}
@@ -1582,6 +1682,8 @@ class Halo:
                     next_pos = 0
             except Exception:
                 next_pos = 0
+        else:
+            next_pos = 0
 
         target_entry_idx = unread_indices[next_pos]
         self.index = target_entry_idx
@@ -1820,3 +1922,5 @@ class Halo:
             self._halo_colored = pm if pm and not pm.isNull() else None
         except Exception:
             self._halo_colored = None
+
+# End of halo.py
